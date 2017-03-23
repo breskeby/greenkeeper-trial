@@ -1,0 +1,14 @@
+{
+  "modulePaths": [
+    "./src/main",
+    "./src/main/view"
+  ],
+  "moduleNameMapper": {
+    "\\.(jpg|jpeg|png|gif|eot|otf|webp|svg|ttf|woff|woff2|mp4|webm|wav|mp3|m4a|aac|oga)$": "<rootDir>/src/test/jest/fileMock.js",
+    "\\.(css|scss)$": "<rootDir>/src/test/jest/styleMock.js"
+  },
+  "setupTestFrameworkScriptFile": "<rootDir>/src/test/jest/setupTestFramework.js",
+  "coverageDirectory": "build/reports/coverage",
+  "coverageReporters": ["html"],
+  "snapshotSerializers": ["<rootDir>/src/test/jest/compact-jsx-serializer"]
+}

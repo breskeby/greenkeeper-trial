@@ -1,0 +1,124 @@
+import org.acme.build.node.ContinuousNodeScript
+import org.acme.build.node.EsLint
+import org.acme.build.node.GraphQLGenerateSchema
+import org.acme.build.node.JestWatchAll
+import org.acme.build.node.NodePlugin
+import org.acme.build.node.Test
+import org.acme.build.node.Webpack
+import com.moowork.gradle.node.yarn.YarnTask
+
+plugins {
+    id "base"
+    id "distribution"
+}
+
+apply plugin: NodePlugin
+
+tasks.create("generateGraphQLSchema", GraphQLGenerateSchema) {
+    schemaInputFile = file('src/main/domain/schema/build.graphqls')
+    schemaOutputFile = file('src/main/domain/schema/build.json')
+}
+
+tasks.create("webpackDll", Webpack) {
+    dependsOn tasks.generateGraphQLSchema
+    configFile = file('webpack.dll.config.js')
+    inputs.file('yarn.lock')
+    outputDir = file("$buildDir/webpack-dll")
+    noCompress = false //!BuildEnvironment.ci && !project.hasProperty("prodJs")
+}
+
+tasks.create("webpack", Webpack) {
+    dependsOn tasks.webpackDll
+
+    configFile = file('webpack.config.js')
+    outputDir = file("$buildDir/webpack")
+    inputs.dir('src/main')
+    inputs.dir("$buildDir/webpack-dll")
+    nodeEnv = "production"
+    noCompress = false //!BuildEnvironment.ci && !project.hasProperty("prodJs")
+
+    // Avoid unnecessarily running Webpack just for the sanity check
+    // It gets built because it's part of the server test runtime.
+    // However, it's not actually needed for sanity check.
+    inputs.property("sanityCheck") { gradle.taskGraph.hasTask(rootProject.tasks.sanityCheck) }
+    prependParallelSafeAction {
+        if (gradle.taskGraph.hasTask(rootProject.tasks.sanityCheck)) {
+            outputDir.mkdirs()
+            new File(outputDir, ".marker").createNewFile()
+            throw new StopExecutionException()
+        }
+    }
+}
+
+tasks.create("lint", EsLint) {
+    sourceDir = file('src/main')
+}
+
+tasks.create("test", Test) {
+    testSrc = file('src/test')
+    mainSrc = file('src/main')
+}
+
+check.dependsOn tasks.test, tasks.lint
+
+tasks.create("watchAllTests", JestWatchAll) {
+    testSrc = file('src/test')
+    mainSrc = file('src/main')
+}
+
+tasks.create("resetNpm", YarnTask) {
+    yarnCommand = ['upgrade'] as String[]
+}
+
+tasks.create("startUiServer", ContinuousNodeScript) {
+    dependsOn tasks.webpackDll
+
+    args << file('devServer.js') << "--development" << "--base-output-path" << file("$buildDir/webpack").absolutePath
+
+    if (project.hasProperty('debugJs')) {
+        args << '--debugJs'
+    }
+
+    onStop = {
+        try {
+            new URL("http://localhost:5050/stop").text
+        } catch (SocketException ignore) {
+            // not running
+        }
+    }
+    appendParallelSafeAction {
+        // Start compiling the assets straight away
+        Thread.start {
+            try {
+                sleep 2000 // wait for server to start
+                new URL("http://localhost:5050/ui/commons.bundle.js").text
+                logger.lifecycle("UI compile complete.")
+            } catch (Exception e) {
+                logger.error("Priming load of UI assets failed", e)
+            }
+        }
+    }
+}
+
+distributions {
+    main {
+        contents {
+            from tasks.webpackDll, tasks.webpack
+        }
+    }
+}
+
+artifacts {
+    delegate.default distTar
+}
+
+// Since building the UI is slow and has many dependents, try and do it ASAP.
+// -- Grab these now as they are too expensive to lookup in the loop below
+def thisProject = project
+def webpackTask = tasks.webpack
+def yarnTask = tasks.yarn
+allprojects {
+    if (it != thisProject) {
+        tasks.all { shouldRunAfter webpackTask, yarnTask }
+    }
+}

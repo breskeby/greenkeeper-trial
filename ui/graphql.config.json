@@ -1,0 +1,5 @@
+{
+  "schema": {
+    "file": "src/main/domain/schema/build.json"
+  }
+}
